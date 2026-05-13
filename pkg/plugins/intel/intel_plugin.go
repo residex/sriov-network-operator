@@ -43,3 +43,11 @@ func (p *IntelPlugin) Apply() error {
 	log.Log.Info("intel plugin Apply()")
 	return nil
 }
+
+func (p *IntelPlugin) ApplyLiveChanges(new *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	return false, nil
+}
+
+func (p *IntelPlugin) NodeStateCheckLive(new *sriovnetworkv1.SriovNetworkNodeState) bool {
+	return false
+}

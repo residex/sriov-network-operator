@@ -232,6 +232,7 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{RequeueAfter: consts.DaemonRequeueTime}, nil
 		}
 	}
+	// changes have been made need to update here..
 
 	// set sync state to inProgress, but we don't clear the failed status
 	err = dn.updateSyncState(ctx, desiredNodeState, consts.SyncStatusInProgress, desiredNodeState.Status.LastSyncError)
@@ -239,6 +240,7 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		reqLogger.Error(err, "failed to update sync status to inProgress")
 		return ctrl.Result{}, err
 	}
+	liveChanges := dn.hasLiveChanges(desiredNodeState)
 
 	reqReboot, reqDrain, err := dn.checkOnNodeStateChange(desiredNodeState)
 	if err != nil {
@@ -261,6 +263,11 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	reqLogger.V(0).Info("aggregated daemon node state requirement",
 		"drain-required", reqDrain, "reboot-required", reqReboot, "disable-drain", vars.DisableDrain)
+
+	// no drain or reboot needed as can be done trhough linux kernel (ip link)
+	if !reqDrain && !reqReboot && liveChanges {
+		return dn.applyLiveChanges(ctx, desiredNodeState, sriovResult)
+	}
 
 	// handle drain only if the plugins request drain, or we are already in a draining request state
 	if reqDrain ||
@@ -286,6 +293,53 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (dn *NodeReconciler) hasLiveChanges(desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) bool {
+	hasChanges := dn.mainPlugin.NodeStateCheckLive(desiredNodeState)
+
+	for _, additionalPlugin := range dn.additionalPlugins {
+		c := additionalPlugin.NodeStateCheckLive(desiredNodeState)
+		hasChanges = hasChanges || c
+	}
+
+	return hasChanges
+
+}
+
+func (dn *NodeReconciler) applyLiveChanges(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, sriovResult *hosttypes.SriovResult) (ctrl.Result, error) {
+	funcLog := log.Log.WithName("applyLiveChanges")
+
+	_, err := dn.mainPlugin.ApplyLiveChanges(desiredNodeState)
+
+	if err != nil {
+		funcLog.Error(err, "applyLiveChanges plugin error", "mainPluginName", dn.mainPlugin.Name())
+		return ctrl.Result{}, err
+	}
+
+	for _, additionalPlugin := range dn.additionalPlugins {
+		_, err = additionalPlugin.ApplyLiveChanges(desiredNodeState)
+		if err != nil {
+			funcLog.Error(err, "applyLiveChanges plugin error", "pluginName", additionalPlugin.Name())
+			return ctrl.Result{}, err
+		}
+	}
+	syncStatus := consts.SyncStatusSucceeded
+	lastSyncError := ""
+	if vars.UsingSystemdMode {
+		syncStatus = sriovResult.SyncStatus
+		lastSyncError = sriovResult.LastSyncError
+	}
+
+	err = dn.updateSyncState(ctx, desiredNodeState, syncStatus, lastSyncError)
+	if err != nil {
+		funcLog.Error(err, "applyLiveChanges update sync error")
+		return ctrl.Result{}, err
+
+	}
+
+	return ctrl.Result{RequeueAfter: consts.DaemonRequeueTime}, nil
+
 }
 
 // checkOnNodeStateChange checks the state change required for the node based on the desired SriovNetworkNodeState.

@@ -317,3 +317,11 @@ func (p *K8sPlugin) isOVSHwOffloadingEnabled() bool {
 	}
 	return false
 }
+
+func (p *K8sPlugin) ApplyLiveChanges(new *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	return false, nil
+}
+
+func (p *K8sPlugin) NodeStateCheckLive(new *sriovnetworkv1.SriovNetworkNodeState) bool {
+	return false
+}

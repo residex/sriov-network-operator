@@ -201,11 +201,13 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		ObjectMeta: metav1.ObjectMeta{Name: nodePolicySyncEventName, Namespace: ""}}}
 	close(eventChan)
 
+	// trigger reconcile when SriovNetwork value changes, need to watch the network and then reconcile when change
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovNetworkNodePolicy{}).
 		Watches(&corev1.Node{}, nodeEvenHandler).
 		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, delayedEventHandler).
 		Watches(&sriovnetworkv1.SriovNetworkPoolConfig{}, delayedEventHandler).
+		Watches(&sriovnetworkv1.SriovNetwork{}, delayedEventHandler).
 		WatchesRawSource(source.Channel(eventChan, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
@@ -472,6 +474,30 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovNetworkNodeState(ctx context
 				}
 				// record the evaluated policy priority for next loop
 				ppp = p.Spec.Priority
+			}
+		}
+
+		snList := &sriovnetworkv1.SriovNetworkList{}
+		err := r.List(ctx, snList)
+		if err != nil {
+			return fmt.Errorf("failed to list netowrks: %v", err)
+		}
+		for i := range newVersion.Spec.Interfaces {
+			for j := range newVersion.Spec.Interfaces[i].VfGroups {
+				vg := &newVersion.Spec.Interfaces[i].VfGroups[j]
+
+				for _, sn := range snList.Items {
+					if sn.Spec.ResourceName == vg.ResourceName {
+						if sn.Spec.MinTxRate != nil {
+							vg.MinTxRate = *sn.Spec.MinTxRate
+						}
+						if sn.Spec.MaxTxRate != nil {
+							vg.MaxTxRate = *sn.Spec.MaxTxRate
+						}
+						break
+					}
+
+				}
 			}
 		}
 

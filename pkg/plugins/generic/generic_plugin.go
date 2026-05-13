@@ -3,6 +3,8 @@ package generic
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -14,6 +16,7 @@ import (
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
+	"github.com/vishvananda/netlink"
 )
 
 var PluginName = "generic"
@@ -155,6 +158,38 @@ func (p *GenericPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeSt
 		needDrain = true
 	}
 	return
+}
+
+func (p *GenericPlugin) NodeStateCheckLive(new *sriovnetworkv1.SriovNetworkNodeState) bool {
+	log.Log.Info("generic plugin NodeStateCheckLive()")
+	if p.DesireState == nil {
+		return false
+	}
+	return p.ratesChanged(new, p.DesireState)
+
+}
+
+func (p *GenericPlugin) ratesChanged(
+	new, current *sriovnetworkv1.SriovNetworkNodeState,
+) bool {
+	for _, newIface := range new.Spec.Interfaces {
+		for _, oldIface := range current.Spec.Interfaces {
+			if oldIface.Name != newIface.Name {
+				continue
+			}
+			for _, newGrp := range newIface.VfGroups {
+				for _, oldGrp := range oldIface.VfGroups {
+					if oldGrp.ResourceName != newGrp.ResourceName {
+						continue
+					}
+					if oldGrp.MaxTxRate != newGrp.MaxTxRate || oldGrp.MinTxRate != newGrp.MinTxRate {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // CheckStatusChanges verify whether SriovNetworkNodeState CR status present changes on configured VFs.
@@ -484,6 +519,96 @@ func (p *GenericPlugin) needRebootNode(state *sriovnetworkv1.SriovNetworkNodeSta
 	}
 
 	return needReboot, nil
+}
+
+func (p *GenericPlugin) parseVfRange(vfRange string) ([]int, error) {
+	var vfValues []int
+	if strings.Contains(vfRange, ",") { // 0,2,4
+		for _, value := range strings.Split(vfRange, ",") {
+			valueNum, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, err
+			}
+			vfValues = append(vfValues, valueNum)
+		}
+
+		return vfValues, nil
+	}
+
+	// 0-3
+
+	parts := strings.Split(vfRange, "-")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid vf range format: %s", vfRange)
+	}
+
+	start, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid start value: %s", parts[0])
+	}
+
+	end, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid end value: %s", parts[1])
+	}
+
+	for i := start; i <= end; i++ {
+		vfValues = append(vfValues, i)
+	}
+	return vfValues, nil
+}
+
+func (p *GenericPlugin) ApplyLiveChanges(new *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	// need pf link, vf, min and max rates
+	//netlink.LinkByName(args.IfName) get link by interface name
+	// need to iterate through interfaces func needVfioDriver(state *sriovnetworkv1.SriovNetworkNodeState) gets vf from interfaces
+
+	// interface (pf) contains vf groups (need to determine which ones need change)
+	// vf groups contain the min/max tx rate alongside the range (0-3 --> 0, 1, 2 ,3)
+	//https://github.com/k8snetworkplumbingwg/sriov-network-operator/blob/master/doc/api/node-state-api.md?plain=1#L112
+	// ^ shows both [0-3] AND [0,5,6,7] can be used which is why created new function to handle both over the native one
+
+	for _, interfaceInfo := range new.Spec.Interfaces {
+		if interfaceInfo.ExternallyManaged {
+			continue
+		}
+
+		link, err := netlink.LinkByName(interfaceInfo.Name)
+		if err != nil {
+			log.Log.Error(err, "generic-plugin ApplyLiveChanges(): failed to find link by name",
+				"name", interfaceInfo.Name,
+			)
+			return false, err
+		}
+
+		// each vf inside the pf (link/interface) need to set the min/max rates
+		for _, vfGroup := range interfaceInfo.VfGroups {
+			// 0-3 = 0,1,2,3
+			// 0,1,4 = 0,1,4
+
+			vfIDs, err := p.parseVfRange(vfGroup.VfRange)
+			if err != nil {
+				log.Log.Error(err, "generic-plugin ApplyLiveChanges(): failed to parse vf range",
+					"range", vfGroup.VfRange,
+				)
+				return false, err
+			}
+			for _, vfID := range vfIDs {
+				err = netlink.LinkSetVfRate(link, vfID, vfGroup.MinTxRate, vfGroup.MaxTxRate)
+				if err != nil {
+					log.Log.Error(err, "generic-plugin ApplyLiveChanges(): failed to set vf rate",
+						"vfid", vfID,
+						"interface", interfaceInfo.Name,
+						"min", vfGroup.MinTxRate,
+						"max", vfGroup.MaxTxRate,
+					)
+					return false, err
+				}
+			}
+
+		}
+	}
+	return false, nil
 }
 
 // ////////////// for testing purposes only ///////////////////////

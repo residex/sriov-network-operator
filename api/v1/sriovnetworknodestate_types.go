@@ -51,6 +51,8 @@ type VfGroup struct {
 	Mtu          int    `json:"mtu,omitempty"`
 	IsRdma       bool   `json:"isRdma,omitempty"`
 	VdpaType     string `json:"vdpaType,omitempty"`
+	MaxTxRate    int    `json:"maxTxRate,omitempty"`
+	MinTxRate    int    `json:"minTxRate,omitempty"`
 }
 
 type InterfaceExt struct {

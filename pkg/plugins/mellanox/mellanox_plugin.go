@@ -255,3 +255,11 @@ func (p *MellanoxPlugin) nicConfiguredByOperator(nicPortsMap map[string]sriovnet
 
 	return false, nil
 }
+
+func (p *MellanoxPlugin) ApplyLiveChanges(new *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	return false, nil
+}
+
+func (p *MellanoxPlugin) NodeStateCheckLive(new *sriovnetworkv1.SriovNetworkNodeState) bool {
+	return false
+}

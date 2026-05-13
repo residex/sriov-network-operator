@@ -38,6 +38,11 @@ func NewVirtualPlugin(helper helper.HostHelpersInterface) (plugin.VendorPlugin, 
 }
 
 // Name returns the name of the plugin
+
+func (p *VirtualPlugin) NodeStateCheckLive(new *sriovnetworkv1.SriovNetworkNodeState) bool {
+	return false
+}
+
 func (p *VirtualPlugin) Name() string {
 	return p.PluginName
 }
@@ -156,4 +161,8 @@ func needVfioDriver(state *sriovnetworkv1.SriovNetworkNodeState) bool {
 		}
 	}
 	return false
+}
+
+func (p *VirtualPlugin) ApplyLiveChanges(new *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	return false, nil
 }

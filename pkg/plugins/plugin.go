@@ -14,4 +14,8 @@ type VendorPlugin interface {
 	Apply() error
 	// CheckStatusChanges checks status changes on the SriovNetworkNodeState CR for configured VFs.
 	CheckStatusChanges(*sriovnetworkv1.SriovNetworkNodeState) (bool, error)
+	// NodeStateCheckLive checks if the min/max tx has been updated from previous state.
+	NodeStateCheckLive(*sriovnetworkv1.SriovNetworkNodeState) bool
+	// Apply live changes based on updated config for VFs. No reboot required.
+	ApplyLiveChanges(*sriovnetworkv1.SriovNetworkNodeState) (bool, error)
 }
